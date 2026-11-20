@@ -2,7 +2,7 @@
 // the standard library.
 //
 // It scores the sealed DefiLlama snapshot (758 protocols, 2026-11-14) with the
-// radar-2 model in lib/model.ts, writes the ranked board to board.json, copies
+// radar-3 model in lib/model.ts, writes the ranked board to board.json, copies
 // the static dashboard and the three screenshots beside it, and finishes with
 // dossier.json, the summary the judge reads. The dashboard never touches the
 // network: index.html, app.css and app.js render from data.js, which this
