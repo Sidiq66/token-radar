@@ -183,3 +183,15 @@ ol.steps .cost { display: block; color: var(--muted); font-size: 13px; margin-to
   .equation { grid-template-columns: 1fr; }
   .count { margin-left: 0; }
 }
+
+.sandbox-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.sandbox-head h2 { margin: 0; font-size: 17px; }
+.sandbox-body { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 22px; margin-top: 12px; }
+.sandbox-field label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.sandbox-field label b { font-variant-numeric: tabular-nums; }
+.sandbox-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.sandbox-field .sub { display: block; margin-top: 4px; }
+.sandbox-body > p, .sandbox-body > .button { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .sandbox-body { grid-template-columns: 1fr; }
+}

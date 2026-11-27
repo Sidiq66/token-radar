@@ -1,35 +1,39 @@
-// The token radar's model, radar-3: one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model, radar-4: one snapshot of the protocol universe in, one ranked board out.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
-// pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol
+// The board covers every rankable pre-token protocol in the snapshot: the whole watchlist (the
+// floor, never a ceiling), every rankable protocol above the floor the watchlist rule leaves
+// out, and every rankable protocol below it — the early rows the radar exists to find. A protocol
 // is pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol);
 // the snapshot's live-token protocols are kept apart and shown as the market's own values, never
 // mixed into the ranked board.
 //
-// Implied value follows only from the snapshot's own figures, and the market's own multiples are
-// part of them: a token that already trades tells the market what a protocol of its kind is worth
-// relative to its TVL, so the model prices a pre-token protocol against its own category's live
-// comparables instead of one flat multiple for every kind of protocol:
+// Implied value follows only from the snapshot's own figures, and the market's own pricing is
+// part of them — but a flat multiple misprices size. Across the 128 live-token protocols with a
+// market cap, market-cap-to-TVL falls from x0.88 at the smallest TVL quartile to x0.05 at the
+// largest, and a log-log fit of market cap on TVL (slope 0.52, R² 0.19) predicts a held-out live
+// token's market cap with a median log error of 1.22, against 1.63 for the category-median
+// multiple radar-3 used. So radar-4 prices a pre-token protocol on the fitted curve, not on a
+// flat multiple:
 //
-//   multiple   = shrunk median mcap/tvl of the live-token protocols in the protocol's category
-//                (shrunk toward the whole market's median when the category holds few live
-//                protocols, clamped to [0.02, 2.5]; a category with no live protocol takes the
-//                market median). The category's shrunk quartiles ride along as multiple_low and
-//                multiple_high, and price the row's implied range the same way.
-//   base       = tvl_usd x multiple
-//   growth     = clamp(change_7d, -60, 120) per cent
-//   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
-//   momentum   = clamp(growth - the category's median change_7d, -40, 40): how the protocol's week
-//                compares with its own kind's week, so a protocol shrinking slower than a falling
-//                category is not read the same as one shrinking in a rising category
+//   fit          = log-log OLS of log(mcap_usd) on log(tvl_usd) over the live-token protocols
+//                  with a market cap (n = 128); fitted multiple = exp(intercept + (slope - 1)
+//                  x ln(tvl_usd)), clamped to [0.02, 2.5]
+//   base         = tvl_usd x fitted multiple
+//   range        = the same product times the fit's residual quartiles (x0.31 and x4.11): the
+//                  spread of what live tokens actually trade at around the curve, not a
+//                  confidence trick
+//   growth       = clamp(change_7d, -60, 120) per cent
+//   growthMult   = 1 + (growth / 100) x GROWTH_WEIGHT
+//   momentum     = clamp(growth - the category's median change_7d, -40, 40): how the protocol's
+//                  week compares with its own kind's week, so a protocol shrinking slower than a
+//                  falling category is not read the same as one shrinking in a rising category
 //   momentumMult = 1 + (momentum / 100) x MOMENTUM_WEIGHT
-//   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
-//   likelihood = (0.6 + 0.8 x token_rate) x (0.9 + 0.2 x min(age_days, 1095) / 1095)
-//                (token_rate: the share of the protocol's category that already has a token,
-//                shrunk toward the market's own rate when the category is small)
-//   chains     = 1 + 0.02 x min(chains - 1, 5)
-//   implied    = max(1, round(base x growthMult x momentumMult x maturity x likelihood x chains))
-//   range      = the same product with multiple_low and multiple_high in place of the median
+//   maturity     = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
+//   likelihood   = (0.6 + 0.8 x token_rate) x (0.9 + 0.2 x min(age_days, 1095) / 1095)
+//                  (token_rate: the share of the protocol's category that already has a token,
+//                  shrunk toward the market's own rate when the category is small)
+//   chains       = 1 + 0.02 x min(chains - 1, 5)
+//   implied      = max(1, round(base x growthMult x momentumMult x maturity x likelihood x chains))
 //
 // The constants are the model's, stated in the dashboard and changeable in the model sandbox. No
 // protocol name is ever special-cased: the same function scores every row.
@@ -97,10 +101,11 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
-/** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
-export const EARLY_ROWS = 160;
+/** The board carries every rankable pre-token protocol: the watchlist, the rankable protocols
+ * above the floor the watchlist rule leaves out, and every rankable protocol below the floor.
+ * No cap, no TVL cut: the floor is where the reading started, not where it stops. */
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -138,7 +143,7 @@ export interface BoardRow {
   gecko_id: string | null;
   symbol: string | null;
   token_status: 'pre-token';
-  set: 'watchlist' | 'early';
+  set: 'watchlist' | 'early' | 'above';
   age_days: number | null;
   implied_value_usd: number;
   implied_low_usd: number;
@@ -150,12 +155,12 @@ export interface BoardRow {
     relative_growth_pct: number;
     maturity_multiplier: number;
     age_days: number | null;
-    category_multiple: number;
+    fit_multiple: number;
     category_median_change_7d: number;
     launch_likelihood: number;
     chain_factor: number;
   };
-  category_multiple: number;
+  fit_multiple: number;
   launch_likelihood: number;
   chain_factor: number;
   comparables: number;
@@ -178,14 +183,14 @@ export interface RadarRow {
   mcap_usd: number | null;
   listed_at: string | null;
   age_days: number | null;
-  set: 'watchlist' | 'early';
+  set: 'watchlist' | 'early' | 'above';
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
   growth_multiplier: number;
   momentum_multiplier: number;
   maturity_multiplier: number;
-  category_multiple: number;
+  fit_multiple: number;
   launch_likelihood: number;
   chain_factor: number;
   comparables: number;
@@ -215,9 +220,11 @@ export interface RadarData {
   floor_usd: number;
   model: ModelConstants;
   model_version: string;
+  fit: FitCurve;
   watchlist_size: number;
   board_size: number;
   early_size: number;
+  above_size: number;
   live_size: number;
   categories: CategoryStat[];
   rows: RadarRow[];
@@ -314,12 +321,72 @@ export function categoryStats(snapshot: Snapshot, model: ModelConstants = MODEL)
   return { byCategory, globalMultiple, globalRate };
 }
 
+/** The fitted pricing curve: a log-log fit of market cap on TVL over the live-token
+ * protocols with a market cap, with the residual quartiles that price the implied range. */
+export interface FitCurve {
+  intercept: number;
+  slope: number;
+  r2: number;
+  low_mult: number;
+  high_mult: number;
+  comparables: number;
+}
+
+/** The log-log fit of market cap on TVL over the live-token protocols that carry a market
+ * cap. A flat multiple misprices size: the fitted slope is well under 1, so a protocol ten
+ * times the TVL is worth about three times the implied value, not ten times. The residual
+ * quartiles are the range: how far live tokens actually sit from the curve, in either
+ * direction, so the range is the market's own spread, not a confidence trick. */
+export function fitCurve(snapshot: Snapshot): FitCurve {
+  const live = snapshot.protocols.filter(
+    (p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0,
+  );
+  const xs = live.map((p) => Math.log(p.tvl_usd));
+  const ys = live.map((p) => Math.log(p.mcap_usd!));
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  let sst = 0;
+  for (let i = 0; i < n; i++) {
+    sxx += (xs[i]! - mx) ** 2;
+    sxy += (xs[i]! - mx) * (ys[i]! - my);
+    sst += (ys[i]! - my) ** 2;
+  }
+  const slope = sxx === 0 ? 1 : sxy / sxx;
+  const intercept = my - slope * mx;
+  let sse = 0;
+  const residuals: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const r = ys[i]! - (intercept + slope * xs[i]!);
+    residuals.push(r);
+    sse += r * r;
+  }
+  return {
+    intercept,
+    slope,
+    r2: sst === 0 ? 0 : 1 - sse / sst,
+    low_mult: Math.exp(quantile(residuals, 0.25) ?? 0),
+    high_mult: Math.exp(quantile(residuals, 0.75) ?? 0),
+    comparables: n,
+  };
+}
+
+/** The fitted multiple at a TVL: the curve's price for a protocol of that size, clamped to
+ * the same bounds the old category multiple kept, so no size ever prices absurdly. */
+export function fittedMultiple(tvlUsd: number, fit: FitCurve, model: ModelConstants): number {
+  const mult = Math.exp(fit.intercept + (fit.slope - 1) * Math.log(Math.max(1, tvlUsd)));
+  return Math.min(model.multiple_cap, Math.max(model.multiple_floor, mult));
+}
+
 /** The multipliers, the implied value and its range for one protocol under `model`. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   model: ModelConstants,
   stats: { byCategory: Map<string, CategoryStat>; globalMultiple: number },
+  fit: FitCurve,
 ): { implied: number; low: number; high: number; growthPct: number; growthMult: number; momentumMult: number; relativeGrowth: number; maturityMult: number; age: number | null; multiple: number; likelihood: number; chainFactor: number; comparables: number; categoryMedianChange: number } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
@@ -328,10 +395,10 @@ export function impliedValue(
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const stat = stats.byCategory.get(categoryKey(protocol));
-  const multiple = stat === undefined ? stats.globalMultiple : stat.multiple;
-  const multipleLow = stat === undefined ? stats.globalMultiple : stat.multiple_low;
-  const multipleHigh = stat === undefined ? stats.globalMultiple : stat.multiple_high;
-  const comparables = stat === undefined ? 0 : stat.live;
+  // The price comes from the fitted curve, not from the category's median multiple: the
+  // curve is what the market's own live tokens say a protocol of this size is worth.
+  const multiple = fittedMultiple(protocol.tvl_usd, fit, model);
+  const comparables = fit.comparables;
   const rate = stat === undefined ? 0.5 : stat.token_rate;
   const categoryMedianChange = stat === undefined ? 0 : stat.median_change_7d;
   const relativeGrowth = Math.min(model.momentum_span, Math.max(-model.momentum_span, growthPct - categoryMedianChange));
@@ -341,17 +408,37 @@ export function impliedValue(
   const chainFactor = 1 + model.chain_step * Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_max_steps);
   const rest = growthMult * momentumMult * maturityMult * likelihood * chainFactor;
   const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * rest));
-  const low = Math.max(1, Math.round(protocol.tvl_usd * multipleLow * rest));
-  const high = Math.max(1, Math.round(protocol.tvl_usd * multipleHigh * rest));
+  // The range is the same row priced at the fit's residual quartiles: how far live tokens
+  // actually sit from the curve, so a wide range is the market's own spread, not a guess.
+  const low = Math.max(1, Math.round(implied * fit.low_mult));
+  const high = Math.max(1, Math.round(implied * fit.high_mult));
   return { implied, low, high, growthPct, growthMult, momentumMult, relativeGrowth, maturityMult, age, multiple, likelihood, chainFactor, comparables, categoryMedianChange };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/** The house's watchlist rule, without its TVL floor: a protocol the board may rank is
+ * pre-token and not a wrapped, staked or bridged product of a protocol whose token already
+ * trades. The snapshot carries no parent-protocol field, so the rule is applied from what it
+ * does carry: the category, the name's version marker, whole words wrapped/staked/staking,
+ * and an exchange's name at the start. This is what keeps WBTC, Binance staked ETH and USDT0
+ * off the board: each is a wrapped or staked product of a token that already trades, so
+ * ranking it as a protocol still to come would be the board's own error, not a find. */
+const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+const EXCHANGE_PREFIX = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\b/;
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/** Whether a protocol is one the board may rank: pre-token, and not a wrapped, staked or
+ * bridged product of one whose token already trades. */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  return (
+    isPreToken(p) &&
+    !EXCLUDED_CATEGORIES.has(p.category ?? '') &&
+    !VERSIONED.test(p.name) &&
+    !EXCHANGE_PREFIX.test(p.name) &&
+    !WRAPPED_WORD.test(p.name)
+  );
 }
 
 /** The snapshot's protocol by slug. */
@@ -370,6 +457,7 @@ export interface BoardSummary {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const stats = categoryStats(snapshot, model);
+  const fit = fitCurve(snapshot);
   const index = bySlug(snapshot.protocols);
   const watchlist = new Set(snapshot.watchlist);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -379,16 +467,17 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a replacement
-  // for a watchlist row: a chosen protocol stays chosen.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
-    .slice(0, EARLY_ROWS);
-  for (const p of early) chosen.set(p.slug, p);
+  // The rest of the board: every rankable pre-token protocol the watchlist leaves out, above
+  // the floor and below it alike. Radar-3 stopped at the 160 largest below the floor, so it
+  // never scored the 60 rankable protocols above it — and it carried wrapped and bridged rows
+  // the watchlist rule leaves out. Radar-4 scores every protocol the rule allows, and none it
+  // forbids. Never a replacement for a watchlist row: a chosen protocol stays chosen.
+  for (const p of snapshot.protocols) {
+    if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
+  }
 
   const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, model, stats);
+    const v = impliedValue(p, snapshot.as_of, model, stats, fit);
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
@@ -407,7 +496,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       gecko_id: s.p.gecko_id,
       symbol: s.p.symbol,
       token_status: 'pre-token' as const,
-      set: watchlist.has(s.p.slug) ? ('watchlist' as const) : ('early' as const),
+      set: watchlist.has(s.p.slug)
+        ? ('watchlist' as const)
+        : s.p.tvl_usd < snapshot.floor_usd
+          ? ('early' as const)
+          : ('above' as const),
       age_days: s.age,
       implied_value_usd: s.implied,
       implied_low_usd: s.low,
@@ -419,12 +512,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
         relative_growth_pct: round4(s.relativeGrowth),
         maturity_multiplier: round4(s.maturityMult),
         age_days: s.age,
-        category_multiple: round4(s.multiple),
+        fit_multiple: round4(s.multiple),
         category_median_change_7d: round4(s.categoryMedianChange),
         launch_likelihood: round4(s.likelihood),
         chain_factor: round4(s.chainFactor),
       },
-      category_multiple: s.multiple,
+      fit_multiple: s.multiple,
       launch_likelihood: s.likelihood,
       chain_factor: s.chainFactor,
       comparables: s.comparables,
@@ -727,7 +820,7 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     momentum_multiplier: row.model.momentum_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
-    category_multiple: row.category_multiple,
+    fit_multiple: row.fit_multiple,
     launch_likelihood: row.launch_likelihood,
     chain_factor: row.chain_factor,
     comparables: row.comparables,
@@ -744,7 +837,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const stats = categoryStats(snapshot, model);
+  const fit = fitCurve(snapshot);
   const early = board.filter((r) => r.set === 'early').length;
+  const above = board.filter((r) => r.set === 'above').length;
   const categories = [...stats.byCategory.values()].sort((a, b) => b.live - a.live || b.protocols - a.protocols || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -752,9 +847,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     floor_usd: snapshot.floor_usd,
     model,
     model_version: MODEL_VERSION,
+    fit,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
+    above_size: above,
     live_size: live.length,
     categories,
     rows: board.map(radarRow),

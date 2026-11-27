@@ -2,11 +2,17 @@
 // the standard library.
 //
 // It scores the sealed DefiLlama snapshot (758 protocols, 2026-11-14) with the
-// radar-3 model in lib/model.ts, writes the ranked board to board.json, copies
+// radar-4 model in lib/model.ts, writes the ranked board to board.json, copies
 // the static dashboard and the three screenshots beside it, and finishes with
 // dossier.json, the summary the judge reads. The dashboard never touches the
 // network: index.html, app.css and app.js render from data.js, which this
 // program writes from the same board.
+//
+// Radar-4 prices every protocol on a log-log fit of market cap on TVL over the
+// live-token comparables, and scores every protocol the watchlist rule allows:
+// the whole watchlist, the rankable protocols above the floor it leaves out, and
+// every rankable protocol below it. No wrapped, staked or bridged product of a
+// token that already trades is ever ranked as a protocol still to come.
 //
 // Run it outside the grader with MAKEFUN_OUTPUT_DIR standing in for /output:
 //   MAKEFUN_OUTPUT_DIR=out node main.ts --input ../token-radar-01-kit/input/snapshot.json
@@ -98,7 +104,8 @@ function main(): void {
   writeFileSync(join(outDir, 'dossier.json'), buildDossier(outDir, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
   process.stdout.write(
-    `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.above_size} above the floor, ${radar.live_size} live set aside)\n` +
+      `token radar: fit log(mcap) = ${radar.fit.intercept.toFixed(2)} + ${radar.fit.slope.toFixed(2)} x log(tvl) over ${radar.fit.comparables} live tokens (R² ${radar.fit.r2.toFixed(2)}, range x${radar.fit.low_mult.toFixed(2)}-x${radar.fit.high_mult.toFixed(2)})\n` +
       `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (3 files), ${join(outDir, 'screenshots')} (${images.length} images) and ${join(outDir, 'dossier.json')}\n`,
   );
 }

@@ -23,17 +23,20 @@ dashboard and screenshots into `out/`, and writes `out/dossier.json` with the ve
 `vendor/makefun-board.ts` library. Open `out/dashboard/index.html` in a browser: it renders
 with no network, from `out/data.js`.
 
-## The model (radar-3)
+## The model (radar-4)
 
 Implied value follows only from the snapshot's own figures. A token that already trades tells
-the market what a protocol of its kind is worth relative to its TVL, so the model prices a
-pre-token protocol against its own category's live comparables instead of one flat multiple:
+the market what a protocol is worth relative to its TVL — but a flat multiple misprices size:
+across the 128 live-token protocols with a market cap, market-cap-to-TVL falls from x0.88 at
+the smallest TVL quartile to x0.05 at the largest. So radar-4 prices a pre-token protocol on a
+fitted curve, not on a flat multiple:
 
-- **Category multiple**: the median market-cap-to-TVL of the live-token protocols in the same
-  category, shrunk toward the whole market's median when the category holds few live tokens,
-  clamped to x0.02..x2.50.
-- **Implied range**: the same row priced at the category's lower and upper quartile multiples,
-  shrunk the same way — the spread of what its kind actually trades at, carried on every row.
+- **Fitted multiple**: `log(market cap) = 6.96 + 0.52 x log(TVL)`, a log-log OLS fit over the
+  128 live-token protocols with a market cap (R² 0.19). Held out one at a time, it predicts a
+  live token's market cap with a median log error of 1.22, against 1.63 for the category-median
+  multiple radar-3 used. The fitted multiple is clamped to x0.02..x2.50.
+- **Implied range**: the same row priced at the fit's residual quartiles, x0.31 and x4.11 — the
+  spread of what live tokens actually trade at around the curve, carried on every row.
 - **Growth**: `1 + clamp(change_7d, -60, 120) / 100 x 0.5`.
 - **Momentum**: `1 + clamp(change_7d - the category's median change_7d, -40, 40) / 100 x 0.25`,
   so a fall inside a falling category is not read as weakness.
@@ -41,11 +44,15 @@ pre-token protocol against its own category's live comparables instead of one fl
 - **Launch likelihood**: `(0.6 + 0.8 x token rate of the category) x an age tilt of x0.90..x1.10`.
 - **Chains**: `1 + 0.02 x min(chains - 1, 5)`.
 
-`implied = round(tvl_usd x category_multiple x growth x momentum x maturity x likelihood x chains)`.
+`implied = round(tvl_usd x fitted_multiple(tvl_usd) x growth x momentum x maturity x likelihood x chains)`.
 
-The board covers the whole watchlist (40 protocols at or above $50M TVL with no token, tagged
-as the watchlist set) plus 160 early pre-token protocols below that floor, and sets the 24
-largest live-token protocols aside with their market caps shown. Each row's farm plan is built
+The board covers every protocol the watchlist rule allows: the whole watchlist (40 protocols
+at or above $50M TVL with no token), the 20 rankable protocols above that floor the list
+leaves out, and all 138 rankable protocols below it — 198 rows. No wrapped, staked or bridged
+product of a token that already trades is ranked as a protocol still to come, and the 24
+largest live-token protocols are set aside with their market caps shown. The dashboard also
+carries a model sandbox: change the growth and momentum weights and the board re-ranks live
+on the same arithmetic. Each row's farm plan is built
 from the protocol's own record: its category gives two distinct protocol actions, its cheapest
 chain gives the gas, a young protocol starts at a test size, and the plan totals its own gas
 and weeks. No protocol name is special-cased: the same function scores every row and writes
